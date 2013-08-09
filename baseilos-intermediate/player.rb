@@ -1,7 +1,7 @@
 # Ruby warrior player 
 # Author: Jozef Lang <www.jozeflang.com>
 # 
-# Level 5
+# Level 6
 
 class Player
 
@@ -14,11 +14,24 @@ class Player
   # A list of alive units
   @alive_units = nil
 
+  # Ticking captives
+  @ticking_captives = nil
+
+  # Last moved direction
+  @last_direction = nil
+
   def play_turn(warrior)
 
   	init_player_instance_values(warrior)
 
-  	if is_enemy_near?(warrior) 
+  	if is_ticking_captive_near?(warrior)
+  		# Rescue ticking captive
+  		_nearest_ticking_captive_direction = get_nearest_ticking_captive(warrior)
+  		warrior.rescue!(_nearest_ticking_captive_direction)
+  	elsif exists_ticking_captives?
+  		# If ticking captives exists hurry to save them
+  		walk_and_avoid(warrior, warrior.direction_of(@ticking_captives[0]))
+  	elsif is_enemy_near?(warrior) 
   		# Fight an enemy if any is near
   		_nearest_enemy = get_nearest_enemy(warrior)
   		warrior.bind!(_nearest_enemy)
@@ -35,25 +48,23 @@ class Player
   	elsif exists_live_units?
   		_next_direction = warrior.direction_of(@alive_units[0])
   		# If any live unit exists go to it and find out what it is
-  		if stairs_in_the_way?(warrior, _next_direction)
-  			# If there are stairs in the way avoid them for now
-  			warrior.walk!(avoid_direction(warrior, _next_direction))
-  		else 
-  			warrior.walk!(_next_direction)
-  		end
+  		walk_and_avoid(warrior, _next_direction)
   	else 
   		# If nothing is alive in the room, find the stairs
-	    warrior.walk!(warrior.direction_of_stairs)	
+	    walk(warrior, warrior.direction_of_stairs)	
 	end
 
 	# Update health
 	@health = warrior.health
 
-	if exists_live_units? and warrior.feel(warrior.direction_of(@alive_units[0])).empty?
-		# Check whether chasen alive unit is dead already.
+	if ((exists_live_units? and warrior.feel(warrior.direction_of(@alive_units[0])).empty?) or
+		(exists_ticking_captives? and warrior.feel(warrior.direction_of(@ticking_captives[0])).empty?))
+		# Check whether chasen alive unit is dead already or we released ticking captive
 		# If yes, listen again
 		@alive_units = warrior.listen
+    @ticking_captives = warrior.listen.select { |u| u.captive? and u.ticking? }
 	end
+
   end
 
   def init_player_instance_values(warrior)
@@ -73,6 +84,30 @@ class Player
   		@alive_units = warrior.listen
   	end
 
+  	if @ticking_captives == nil
+  		@ticking_captives = warrior.listen.select { |u| u.captive? and u.ticking? }
+  	end
+
+  end
+
+  def walk(warrior, direction)
+    '''
+    Walks towards direction and stores the value in instance variable
+    '''
+    @last_direction = direction
+    warrior.walk!(direction)
+  end
+
+  def walk_and_avoid(warrior, direction)
+  	'''
+  	Calls walk! and avoids everything on the way
+  	'''
+  	if stairs_in_the_way?(warrior, direction) or is_direction_empty?(warrior, direction) == false
+  		# If there are stairs in the way avoid them for now
+  		walk(warrior, avoid_direction(warrior, direction))
+  	else 
+  		walk(warrior, direction)
+  	end
   end
 
   def get_nearest_enemy(warrior)
@@ -154,20 +189,45 @@ class Player
 
   def is_direction_empty?(warrior, direction)
   	'''
-  	Returns flag whether wall is in the way (direction we want to go)
+  	Returns flag whether nothing is in the way (direction we want to go)
   	'''
   	return warrior.feel(direction).empty?
   end
 
   def avoid_direction(warrior, direction)
   	'''
-  	Returns an alternative direction to avoid current direction
+  	Returns an alternative direction 
   	'''
+
+    _oposites_directions = {:forward => :backward, :backward => :forward, :left => :right, :right => :left}
+
   	if [:forward, :backward].include? direction
-  		return [:left, :right].reject! { |d| is_direction_empty?(warrior, d) == false }.sample
+  		return [:left, :right].select { |d| is_direction_empty?(warrior, d) and d != _oposites_directions[@last_direction] }.sample
   	else
-  		return [:forward, :backward].reject! { |d| is_direction_empty?(warrior, d) == is_direction_empty? }.sample
+  		return [:forward, :backward].select { |d| is_direction_empty?(warrior, d) and d != _oposites_directions[@last_direction] }.sample
   	end
+  end
+
+  def exists_ticking_captives?()
+  	'''
+  	Returns true if ticking captives exists
+  	'''
+  	return @ticking_captives.size > 0
+  end 
+
+  def is_ticking_captive_near?(warrior)
+  	'''
+  	Returns whether an ticking captive is near. A ticking captive is near if it is located on the field next to the warrior.
+  	Fields are inspected in following order: forward, backward, left, right
+  	'''
+  	return [:forward, :backward, :left, :right].any? { |d| warrior.feel(d).captive? and warrior.feel(d).ticking? }
+  end
+
+  def get_nearest_ticking_captive(warrior)
+  	'''
+  	Returns nearest ticking captive in following direction: forward, backward, left, right. If none is near, returns nil
+  	'''
+  	return [:forward, :backward, :left, :right].detect { |d| warrior.feel(d).captive? and warrior.feel(d).ticking? }
   end
 
 end
