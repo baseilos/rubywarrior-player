@@ -1,14 +1,14 @@
 # Ruby warrior player 
 # Author: Jozef Lang <www.jozeflang.com>
 # 
-# Level 6
+# Level 7
 
 class Player
 
   # Health value from previous turn
   @health
 
-  # Direction of bounded enemies
+  # Direction of bounded enemies - directions from current position
   @bounded_enemies = nil
 
   # A list of alive units
@@ -24,35 +24,59 @@ class Player
 
   	init_player_instance_values(warrior)
 
-  	if is_ticking_captive_near?(warrior)
-  		# Rescue ticking captive
-  		_nearest_ticking_captive_direction = get_nearest_ticking_captive(warrior)
-  		warrior.rescue!(_nearest_ticking_captive_direction)
-  	elsif exists_ticking_captives?
-  		# If ticking captives exists hurry to save them
-  		walk_and_avoid(warrior, warrior.direction_of(@ticking_captives[0]))
-  	elsif is_enemy_near?(warrior) 
-  		# Fight an enemy if any is near
-  		_nearest_enemy = get_nearest_enemy(warrior)
-  		warrior.bind!(_nearest_enemy)
-  		@bounded_enemies.push(_nearest_enemy)
-  	elsif may_rest?(warrior)
-  		warrior.rest!
-  	elsif @bounded_enemies.size > 0 
-  		# Attack bounded enemies nearby
-  		warrior.attack!(@bounded_enemies.pop)
-  	elsif is_captive_near?(warrior)
-  		# Rescue captive if nearby. 
-  		# All bounded enemies (which looks like captives) are already dead due to previous if branch.
-  		warrior.rescue!(get_nearest_captive(warrior))
-  	elsif exists_live_units?
-  		_next_direction = warrior.direction_of(@alive_units[0])
-  		# If any live unit exists go to it and find out what it is
-  		walk_and_avoid(warrior, _next_direction)
-  	else 
-  		# If nothing is alive in the room, find the stairs
-	    walk(warrior, warrior.direction_of_stairs)	
-	end
+    # Check whether a ticking captive exists, it will be the priority number one
+    _nearest_ticking_captive_direction = nil
+    if exists_ticking_captives?
+        _nearest_ticking_captive_direction = warrior.direction_of(@ticking_captives[0])
+    end
+
+    if is_ticking_captive_near?(warrior)
+      # Rescue ticking captive
+      _nearest_ticking_captive_direction = get_nearest_ticking_captive(warrior)
+      warrior.rescue!(_nearest_ticking_captive_direction)
+    elsif _nearest_ticking_captive_direction != nil 
+      # Ticking captive is priority number one
+      if is_enemy_near?(warrior, _nearest_ticking_captive_direction) and num_of_enemy_near(warrior) > 1
+          # Bind all enemies except of  that one which is in the way to ticking captive
+          _nearest_enemy = get_nearest_enemy(warrior, _nearest_ticking_captive_direction)  
+          warrior.bind!(_nearest_enemy)
+          @bounded_enemies.push(_nearest_enemy)    
+      elsif num_of_enemy_near(warrior) > 0
+        # Fight last not bound enemy to free the way
+        warrior.attack!(_nearest_ticking_captive_direction)
+      else 
+        # Walk towards ticking captive
+        walk_and_avoid(warrior, _nearest_ticking_captive_direction)
+      end
+    else     
+      # No ticking captives, do everything else
+      if is_captive_near?(warrior)
+        # Resuce captive if near
+        warrior.rescue!(get_nearest_captive(warrior))  
+      elsif is_enemy_near?(warrior)
+        _nearest_enemy = get_nearest_enemy(warrior)  
+        if num_of_enemy_near(warrior) > 1
+          # Bound all enemies nearby
+          warrior.bind!(_nearest_enemy)
+          @bounded_enemies.push(_nearest_enemy)    
+        else 
+          # Fight last not bounded enemy
+          warrior.attack!(_nearest_enemy)
+        end
+      elsif @bounded_enemies.size > 0
+        # Attack on bounded enemywa
+        warrior.attack!(@bounded_enemies.pop)
+      elsif may_rest?(warrior)
+        warrior.rest!
+      elsif exists_live_units?
+        _next_direction = warrior.direction_of(@alive_units[0])
+        # If any live unit exists go to it and find out what it is
+        walk_and_avoid(warrior, _next_direction)
+      else 
+     # If nothing is alive in the room, find the stairs
+        walk(warrior, warrior.direction_of_stairs)  
+      end
+    end
 
 	# Update health
 	@health = warrior.health
@@ -108,21 +132,31 @@ class Player
   	else 
   		walk(warrior, direction)
   	end
+
+    # Clear record of bounded enemies because we moved to new location
+    @bounded_enemies.clear
   end
 
-  def get_nearest_enemy(warrior)
+  def get_nearest_enemy(warrior, not_this=nil)
   	'''
   	Returns nearest enemy in following direction: forward, backward, left, right. If none is near, returns nil
   	'''
-  	return [:forward, :backward, :left, :right].detect { |d| warrior.feel(d).enemy? == true }
+  	return [:forward, :backward, :left, :right].detect { |d| warrior.feel(d).enemy? == true and (not_this == nil or not_this != d) }
   end
 
-  def is_enemy_near?(warrior)
+  def num_of_enemy_near(warrior)
+    '''
+    Returns the number of nearby enemies
+    '''
+    return [:forward, :backward, :left, :right].count { |d| warrior.feel(d).enemy? == true }
+  end
+
+  def is_enemy_near?(warrior, not_this=nil)
   	'''
   	Returns whether an enemy is near. A enemy is near if it is located on the field next to the warrior.
   	Fields are inspected in following order: forward, backward, left, right
   	'''
-  	return [:forward, :backward, :left, :right].any? { |d| warrior.feel(d).enemy? == true }
+  	return [:forward, :backward, :left, :right].any? { |d| warrior.feel(d).enemy? == true and (not_this == nil or not_this != d)}
   end
 
   def is_captive_near?(warrior)
@@ -154,7 +188,7 @@ class Player
   	  - Sludge
   	  - Captivated (bounded) sludge 
   	'''
-  	return (@bounded_enemies.size > 0 and @alive_units.any? { |u| u.enemy? })
+  	return (@bounded_enemies.size > 0 or @alive_units.any? { |u| u.enemy? })
   end
 
   def is_under_attack?(warrior)
@@ -173,11 +207,13 @@ class Player
   	  - The enemy is nearby
   	  - Is under attack
   	  - No enemies are alive 
+      - A bomb is ticking
   	'''
   	return (warrior.health < 20 and # Is at full health
   			is_enemy_near?(warrior) == false and
   			is_under_attack?(warrior) == false and
-  			exists_live_enemy?() == false)
+  			exists_live_units?() == true and # If none is alive, there is no point to heal ourselves
+        exists_ticking_captives?() == false)
   end
 
   def stairs_in_the_way?(warrior, direction)
